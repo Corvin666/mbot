@@ -29,11 +29,18 @@ int minSpeed = 55;
 int factor = 23;
 int distance = 0;
 
+// Forward declarations
+void Forward(bool safetyCheck = true);
+void Stop();
+void TurnRight();
+void TurnLeft();
+
 enum RobotStates_t
 {
   ROBOT_STATE_IR,
   ROBOT_STATE_PRG_VASYA,
-  ROBOT_STATE_PRG_RUN10
+  ROBOT_STATE_PRG_RUN10,
+  ROBOT_STATE_PRG_PATHFINDING
 };
 RobotStates_t currentState;
 void switchState(enum RobotStates_t state);
@@ -55,11 +62,33 @@ struct run10State_t
    unsigned long msCounter;
 } run10State;
 
+struct pathfindingState_t
+{
+   unsigned long msCounter;
+} pathfindingState;
+
 void setup()
 {
     currentState = ROBOT_STATE_IR;
     infraredReceiverDecode.begin();
     Serial.begin(9600);
+    randomSeed(analogRead(0));
+}
+
+// This will clear IR buffer and in switch to IR mode if needed.
+void clearIRBufferAndCheckCancelProgram()
+{
+    if(infraredReceiverDecode.available()||infraredReceiverDecode.buttonState())
+    {
+        switch(infraredReceiverDecode.read())
+        {
+          case IR_BUTTON_D: 
+               Serial.println("Aborting current program and switching to IR control");
+               Stop();
+               switchState(ROBOT_STATE_IR);
+               break;
+        }
+    }
 }
 
 void loop()
@@ -74,6 +103,10 @@ void loop()
        break;
      case ROBOT_STATE_PRG_RUN10:
        robotRun5Loop();
+       break;
+     case ROBOT_STATE_PRG_PATHFINDING:
+       // Defined in pathfinding.ino
+       robotRunPathFindingLoop();
        break;
   }
 
@@ -99,13 +132,19 @@ void switchState(enum RobotStates_t state)
       MotorL.run(moveSpeed);
       MotorR.run(moveSpeed);
       break;
+  case ROBOT_STATE_PRG_PATHFINDING:
+      // Run the pathfinding logic
+      pathfindingState.msCounter = millis();
+      MotorL.run(moveSpeed);
+      MotorR.run(moveSpeed);
+      break;
   } 
 }
 
 void robotRun5Loop()
 {
   // Clear IR buffer
-  if(infraredReceiverDecode.available()||infraredReceiverDecode.buttonState()) infraredReceiverDecode.read();
+  clearIRBufferAndCheckCancelProgram();
   
   unsigned long timeelapsed = millis()-run10State.msCounter;
   
@@ -124,7 +163,7 @@ void robotRun5Loop()
 void robotVasyaLoop()
 {
   // Clear IR buffer
-  if(infraredReceiverDecode.available()||infraredReceiverDecode.buttonState()) infraredReceiverDecode.read();
+  clearIRBufferAndCheckCancelProgram();
   
   switch(vasyaState.curState)
   {
@@ -210,6 +249,10 @@ void robotIRLoop()
                Serial.println("Running program 10secAhead!");
                switchState(ROBOT_STATE_PRG_RUN10);
                break;
+         case IR_BUTTON_C:
+               Serial.println("Running program pathfinder");
+               switchState(ROBOT_STATE_PRG_PATHFINDING);
+               break;
          case IR_BUTTON_0:
                buzzerOn();
                delay(50);
@@ -225,13 +268,13 @@ void robotIRLoop()
     }
 }
 
-void Forward()
+void Forward(bool safetyCheck)
 {
   Serial.println("Forward");
   distance = UltrasonicSensor.distanceCm();
   Serial.println(distance);
   
-  if ((distance == 0) || (distance > 10))
+  if (((distance == 0) || (distance > 10)) || !safetyCheck)
   {
     MotorL.run(moveSpeed);
     MotorR.run(moveSpeed);
